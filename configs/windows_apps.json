@@ -13,6 +13,7 @@
       "alternatives": {
         "recommended": {
           "name": "Kate",
+          "quick_summary": "Advanced text editor with syntax highlighting",
           "packages": {
             "arch": "kate",
             "ubuntu": "kate",
@@ -37,6 +38,7 @@
       "alternatives": {
         "recommended": {
           "name": "Ark",
+          "quick_summary": "Native archive manager with wide format support",
           "packages": {
             "arch": "ark",
             "ubuntu": "ark",
@@ -62,6 +64,8 @@
       "alternatives": {
         "recommended": {
           "name": "LibreOffice",
+          "quick_summary": "Full-featured office suite with excellent compatibility",
+          "critical_caveat": "Complex Excel macros may need adjustment",
           "packages": {
             "arch": "libreoffice-still",
             "ubuntu": "libreoffice",
@@ -88,6 +92,8 @@
       "alternatives": {
         "recommended": {
           "name": "GIMP",
+          "quick_summary": "Powerful image editor with professional tools",
+          "critical_caveat": "Different interface and some missing pro features",
           "packages": {
             "arch": "gimp",
             "ubuntu": "gimp",
@@ -112,16 +118,17 @@
       },
       "alternatives": {
         "recommended": {
-          "name": "p7zip",
+          "name": "File Roller",
+          "quick_summary": "Simple archive manager with 7-Zip support",
           "packages": {
-            "arch": "p7zip",
-            "ubuntu": "p7zip-full",
+            "arch": "file-roller",
+            "ubuntu": "file-roller",
             "flatpak": "org.gnome.FileRoller"
           }
         },
         "fallback_search": "7zip%20archive"
       },
-      "notes": "Archive utility - p7zip provides command line compatibility",
+      "notes": "Archive utility with excellent Linux alternatives",
       "category": "application"
     }
   ],

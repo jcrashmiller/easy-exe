@@ -2,7 +2,7 @@
 """
 Easy EXE - Automatic Windows executable launcher for Linux
 Handles Wine, DOSBox, and Lutris with intelligent routing
-Now with optional GUI dialogs using PyQt6
+Now with proper GUI/CLI synchronization
 """
 
 import argparse
@@ -21,38 +21,56 @@ import requests
 from bs4 import BeautifulSoup
 import urllib.parse
 
-# Try to import GUI components
+# GUI availability detection
+GUI_AVAILABLE = False
+gui_import_error = None
+
 try:
-    from easy_exe_gui import create_gui_wrapper, HAS_QT
-    GUI_AVAILABLE = HAS_QT
-except ImportError:
-    GUI_AVAILABLE = False
-    print("GUI components not available - running in CLI-only mode")
+    # Check if we have a display first
+    if 'DISPLAY' not in os.environ and 'WAYLAND_DISPLAY' not in os.environ:
+        gui_import_error = "No display environment detected"
+    else:
+        # Try importing GUI components
+        from easy_exe_gui import create_gui_wrapper, HAS_QT
+        if HAS_QT:
+            GUI_AVAILABLE = True
+        else:
+            gui_import_error = "PyQt6 not available in easy_exe_gui module"
+except ImportError as e:
+    gui_import_error = f"GUI module import failed: {e}"
+except Exception as e:
+    gui_import_error = f"GUI initialization error: {e}"
 
 class EasyEXE:
-    def __init__(self, force_cli: bool = False):
-        self.force_cli = force_cli  # Force CLI mode even if GUI available
+    def __init__(self, force_cli: bool = False, verbose: bool = False):
+        self.force_cli = force_cli
+        self.verbose = verbose
         self.setup_paths()
         self.setup_logging()
         self.load_dependencies()
         self.load_messages()
         self.load_configs()
         self.load_state()
-        
+
         # Initialize GUI if available and not forced to CLI
         self.gui = None
         if GUI_AVAILABLE and not force_cli:
             try:
                 self.gui = create_gui_wrapper(self)
-                if self.gui.is_gui_available():
-                    self.logger.info("GUI mode available")
-                else:
-                    self.logger.info("Display not available - using CLI mode")
+                if not self.gui.is_gui_available():
+                    if self.verbose:
+                        self.logger.info("Display not available - using CLI mode")
                     self.gui = None
+                else:
+                    if self.verbose:
+                        self.logger.info("GUI mode initialized successfully")
             except Exception as e:
-                self.logger.debug(f"GUI initialization failed: {e}")
+                if self.verbose:
+                    self.logger.debug(f"GUI initialization failed: {e}")
                 self.gui = None
-        
+        elif not GUI_AVAILABLE and self.verbose:
+            self.logger.info(f"GUI not available: {gui_import_error}")
+
         self.check_dependencies()
 
     def is_gui_mode(self) -> bool:
@@ -163,7 +181,7 @@ class EasyEXE:
             # Try reading /etc/os-release
             with open('/etc/os-release', 'r') as f:
                 content = f.read().lower()
-                if 'arch' in content or 'garuda' in content:
+                if 'garuda' in content or 'arch' in content:
                     return 'arch'
                 elif 'ubuntu' in content or 'mint' in content or 'elementary' in content:
                     return 'ubuntu'
@@ -195,13 +213,14 @@ class EasyEXE:
         if core_missing:
             if self.is_gui_mode():
                 # Try GUI dialog first
-                if self.gui.show_dependency_dialog(core_missing, distro, required=True):
+                user_choice = self.gui.show_dependency_dialog(core_missing, distro, required=True)
+                if user_choice == "exit":
                     sys.exit(1)  # User chose to exit and install
-                else:
-                    # Fallback to CLI
-                    self._show_dependency_help_cli(core_missing, distro, required=True)
-                    sys.exit(1)
+                elif user_choice == "continue":
+                    # User somehow chose to continue despite missing core deps - shouldn't happen for required
+                    pass
             else:
+                # CLI mode - always exit for missing core dependencies
                 self._show_dependency_help_cli(core_missing, distro, required=True)
                 sys.exit(1)
 
@@ -218,10 +237,10 @@ class EasyEXE:
         # Show enhancement suggestions
         if enhancement_missing:
             if self.is_gui_mode():
-                # Try GUI dialog
+                # Try GUI dialog - respect user choice
                 self.gui.show_dependency_dialog(enhancement_missing, distro, required=False)
             else:
-                # CLI fallback
+                # CLI mode for enhancements
                 self._show_dependency_help_cli(enhancement_missing, distro, required=False)
 
     def _check_command(self, command: str) -> bool:
@@ -232,8 +251,247 @@ class EasyEXE:
         except subprocess.CalledProcessError:
             return False
 
-    # [Rest of the methods remain the same as original - continuing with utility methods]
-    
+    def _show_dependency_help_cli(self, missing_deps: List[Tuple[str, Dict]], distro: str, required: bool):
+        """Show dependency installation help in CLI mode"""
+        if required:
+            print("❌ Missing core dependencies:")
+            print("📦 Easy EXE cannot continue without these essential tools.\n")
+        else:
+            print("💡 Easy EXE is ready! For the best experience, consider:\n")
+
+        terminal_help = self.dependencies_config["terminal_instructions"]
+
+        for dep_name, dep_info in missing_deps:
+            print(f"📦 {dep_name}: {dep_info['description']}")
+
+            # Get appropriate command for distribution
+            commands = dep_info.get("commands", {})
+            install_cmd = commands.get(distro, commands.get("unknown", f"# Please install {dep_name}"))
+            print(f"   {install_cmd}")
+
+            # Show benefits for enhancements
+            if not required and "benefits" in dep_info:
+                for benefit in dep_info["benefits"][:2]:  # Show first 2 benefits
+                    print(f"   • {benefit}")
+            print()
+
+        if required:
+            print("🖥️  How to install (using the terminal):")
+        else:
+            print("🖥️  To install enhancements (optional):")
+
+        for instruction in terminal_help:
+            print(f"   {instruction}")
+
+        if not required:
+            print("\n🎯 You can install these anytime and Easy EXE will use them automatically!")
+
+    def ask_if_game(self, exe_path: str, pe_info: Dict) -> Optional[bool]:
+        """Ask user if unknown executable is a game - GUI or CLI. Returns None if cancelled."""
+        if self.is_gui_mode():
+            result = self.gui.show_unknown_program_dialog(exe_path, pe_info)
+            if result["success"]:
+                return result["choice"] == "game"
+            else:
+                # User cancelled - return None to indicate cancellation
+                return None
+
+        # CLI fallback
+        detected_name = pe_info.get('product_name', Path(exe_path).stem)
+
+        print(f"\n❓ Unknown Program Detected: {detected_name}")
+        print("   Easy EXE couldn't identify this program automatically.")
+        print("\n💡 Is this a game?")
+        print("   [y] Yes - Search Lutris for game installers")
+        print("   [n] No - Install as Windows application with Wine")
+        print("   [c] Cancel")
+
+        while True:
+            choice = input("\nChoice [y/n/c]: ").strip().lower()
+            if choice in ['y', 'yes']:
+                return True
+            elif choice in ['n', 'no']:
+                return False
+            elif choice in ['c', 'cancel']:
+                return None
+            else:
+                print("Please enter 'y' for yes, 'n' for no, or 'c' to cancel.")
+
+    def suggest_linux_alternative(self, program_config: Dict) -> Optional[bool]:
+        """Suggest Linux alternative if available - GUI or CLI. Returns None if cancelled."""
+        if not self.state["user_preferences"]["show_alternative_suggestions"]:
+            return False
+
+        alternatives = program_config.get("alternatives")
+        if not alternatives:
+            return False
+
+        if self.is_gui_mode():
+            result = self.gui.show_alternative_dialog(program_config)
+            if result["success"]:
+                choice = result["choice"]
+                if choice == "install":
+                    return self._install_linux_alternative(program_config)
+                elif choice == "browse":
+                    self._offer_web_search(alternatives.get("fallback_search", program_config['name']))
+                    return True
+                elif choice == "continue":
+                    return False
+                elif choice == "disable":
+                    self.state["user_preferences"]["show_alternative_suggestions"] = False
+                    self.save_state()
+                    return False
+            else:
+                # User cancelled - return None to indicate cancellation
+                return None
+
+        # CLI fallback
+        return self._suggest_linux_alternative_cli(program_config)
+
+    def _suggest_linux_alternative_cli(self, program_config: Dict) -> Optional[bool]:
+        """CLI version of Linux alternative suggestion. Returns None if cancelled."""
+        alternatives = program_config.get("alternatives")
+        recommended = alternatives.get("recommended")
+        if not recommended:
+            # No specific recommendation, offer web search
+            self._offer_web_search(alternatives.get("fallback_search", ""))
+            return False
+
+        # Show Linux alternative suggestion
+        alt_name = recommended["name"]
+        packages = recommended["packages"]
+
+        print(f"\n💡 Linux Alternative Available!")
+        print(f"   Instead of {program_config['name']}, consider {alt_name}")
+        print(f"   {alt_name} is Linux-native and may better suit your needs.\n")
+
+        # Check what package managers are available
+        available_managers = self._get_available_package_managers()
+        install_options = []
+
+        for manager, package in packages.items():
+            if manager in available_managers:
+                install_options.append((manager, package))
+
+        if install_options:
+            print("📦 Available installation options:")
+            for i, (manager, package) in enumerate(install_options, 1):
+                cmd = self._get_install_command(manager, package)
+                print(f"   [{i}] {manager}: {cmd}")
+
+        print("\n❓ What would you like to do?")
+        print("   [1] Install Linux alternative")
+        print("   [2] Continue with Windows version")
+        print("   [3] Browse alternatives online")
+        print("   [d] Don't show alternative suggestions again")
+        print("   [c] Cancel")
+
+        while True:
+            choice = input("\nChoice [1/2/3/d/c]: ").strip().lower()
+            if choice == '1' and install_options:
+                return self._install_linux_alternative(program_config)
+            elif choice == '2':
+                return False
+            elif choice == '3':
+                self._offer_web_search(alternatives.get("fallback_search", program_config['name']))
+                return True
+            elif choice == 'd':
+                self.state["user_preferences"]["show_alternative_suggestions"] = False
+                self.save_state()
+                print("💡 Alternative suggestions disabled. You can re-enable them by editing the state file.")
+                return False
+            elif choice == 'c':
+                return None
+            else:
+                print("Please enter '1', '2', '3', 'd', or 'c'")
+
+    def _install_linux_alternative(self, program_config: Dict) -> bool:
+        """Install Linux alternative"""
+        alternatives = program_config.get("alternatives", {})
+        recommended = alternatives.get("recommended")
+        if not recommended:
+            return False
+
+        packages = recommended["packages"]
+        available_managers = self._get_available_package_managers()
+
+        # Find first available package manager
+        for manager in available_managers:
+            if manager in packages:
+                package = packages[manager]
+                cmd = self._get_install_command(manager, package)
+                alt_name = recommended["name"]
+
+                print(f"\n📦 Installing {alt_name}...")
+                try:
+                    subprocess.run(cmd.split(), check=True)
+                    print(f"✅ {alt_name} installed successfully!")
+                    return True
+                except subprocess.CalledProcessError:
+                    print(f"❌ Installation failed. Continuing with Windows version.")
+                    return False
+
+        return False
+
+    def show_warning(self, warning_type: str, program_name: str) -> Optional[bool]:
+        """Show warning dialog and return whether to continue - GUI or CLI. Returns None if cancelled."""
+        pref_key = f"show_{warning_type}s"
+        if not self.state["user_preferences"].get(pref_key, True):
+            return True
+
+        if self.is_gui_mode():
+            result = self.gui.show_warning_dialog(warning_type, program_name)
+            if result["success"]:
+                if result.get("disable_future", False):
+                    self.state["user_preferences"][pref_key] = False
+                    self.save_state()
+                    print(f"💡 {warning_type.replace('_', ' ').title()} warnings disabled.")
+                return result["continue"]
+            else:
+                # User cancelled
+                return None
+
+        # CLI fallback
+        return self._show_warning_cli(warning_type, program_name)
+
+    def _show_warning_cli(self, warning_type: str, program_name: str) -> Optional[bool]:
+        """CLI version of warning dialog. Returns None if cancelled."""
+        pref_key = f"show_{warning_type}s"
+
+        message_template = self.messages.get(warning_type, {}).get("message", "")
+        if not message_template:
+            return True
+
+        message = message_template.format(game_name=program_name)
+        instructions = self.messages.get(warning_type, {}).get("instructions", [])
+
+        print(f"\n⚠️  {message}")
+        print("\n💡 How to handle this in Linux:")
+        for instruction in instructions:
+            print(f"   • {instruction}")
+
+        print(f"\n❓ Continue launching {program_name}?")
+        print("   [y] Yes, continue")
+        print("   [n] No, let me handle this first")
+        print("   [d] Don't show this type of warning again")
+        print("   [c] Cancel")
+
+        while True:
+            choice = input("\nChoice [y/n/d/c]: ").strip().lower()
+            if choice in ['y', 'yes']:
+                return True
+            elif choice in ['n', 'no']:
+                return False
+            elif choice == 'd':
+                self.state["user_preferences"][pref_key] = False
+                self.save_state()
+                print(f"💡 {warning_type.replace('_', ' ').title()} warnings disabled.")
+                return True
+            elif choice in ['c', 'cancel']:
+                return None
+            else:
+                print("Please enter 'y', 'n', 'd', or 'c'")
+
     def read_pe_header(self, exe_path: str) -> Dict[str, str]:
         """Extract information from PE header"""
         try:
@@ -253,7 +511,6 @@ class EasyEXE:
                     return {}
 
                 # Skip to version info (simplified extraction)
-                # This is a basic implementation - could be enhanced
                 f.seek(0)
                 content = f.read(8192)  # Read first 8KB
 
@@ -323,222 +580,6 @@ class EasyEXE:
             self.logger.debug(f"Lutris search failed: {e}")
             return None
 
-    def _show_dependency_help_cli(self, missing_deps: List[Tuple[str, Dict]], distro: str, required: bool):
-        """Show dependency installation help in CLI mode"""
-        if required:
-            print("❌ Missing core dependencies:")
-            print("📦 Easy EXE cannot continue without these essential tools.\n")
-        else:
-            print("💡 Easy EXE is ready! For the best experience, consider:\n")
-
-        terminal_help = self.dependencies_config["terminal_instructions"]
-
-        for dep_name, dep_info in missing_deps:
-            print(f"📦 {dep_name}: {dep_info['description']}")
-
-            # Get appropriate command for distribution
-            commands = dep_info.get("commands", {})
-            install_cmd = commands.get(distro, commands.get("unknown", f"# Please install {dep_name}"))
-            print(f"   {install_cmd}")
-
-            # Show benefits for enhancements
-            if not required and "benefits" in dep_info:
-                for benefit in dep_info["benefits"][:2]:  # Show first 2 benefits
-                    print(f"   • {benefit}")
-            print()
-
-        if required:
-            print("🖥️  How to install (using the terminal):")
-        else:
-            print("🖥️  To install enhancements (optional):")
-
-        for instruction in terminal_help:
-            print(f"   {instruction}")
-
-        if not required:
-            print("\n🎯 You can install these anytime and Easy EXE will use them automatically!")
-
-    def ask_if_game(self, exe_path: str, pe_info: Dict) -> bool:
-        """Ask user if unknown executable is a game - GUI or CLI"""
-        if self.is_gui_mode():
-            success, choice = self.gui.show_unknown_program_dialog(exe_path, pe_info)
-            if success and choice == "game":
-                return True
-            elif success and choice == "app":
-                return False
-            elif choice == "cancel":
-                sys.exit(0)
-            # Fall through to CLI if GUI failed
-        
-        # CLI fallback
-        detected_name = pe_info.get('product_name', Path(exe_path).stem)
-
-        print(f"\n❓ Unknown Program Detected: {detected_name}")
-        print("   Easy EXE couldn't identify this program automatically.")
-        print("\n💡 Is this a game?")
-        print("   [y] Yes - Search Lutris for game installers")
-        print("   [n] No - Install as Windows application with Wine")
-
-        while True:
-            choice = input("\nChoice [y/n]: ").strip().lower()
-            if choice in ['y', 'yes']:
-                return True
-            elif choice in ['n', 'no']:
-                return False
-            else:
-                print("Please enter 'y' for yes or 'n' for no.")
-
-    def suggest_linux_alternative(self, program_config: Dict) -> bool:
-        """Suggest Linux alternative if available - GUI or CLI"""
-        if not self.state["user_preferences"]["show_alternative_suggestions"]:
-            return False
-
-        alternatives = program_config.get("alternatives")
-        if not alternatives:
-            return False
-
-        if self.is_gui_mode():
-            success, choice = self.gui.show_alternative_dialog(program_config)
-            if success:
-                if choice == "install":
-                    return self._install_linux_alternative(program_config)
-                elif choice == "browse":
-                    self._offer_web_search(alternatives.get("fallback_search", program_config['name']))
-                    return True
-                elif choice == "continue":
-                    return False
-            # Fall through to CLI if GUI failed
-
-        # CLI fallback
-        return self._suggest_linux_alternative_cli(program_config)
-
-    def _suggest_linux_alternative_cli(self, program_config: Dict) -> bool:
-        """CLI version of Linux alternative suggestion"""
-        alternatives = program_config.get("alternatives")
-        recommended = alternatives.get("recommended")
-        if not recommended:
-            # No specific recommendation, offer web search
-            self._offer_web_search(alternatives.get("fallback_search", ""))
-            return False
-
-        # Show Linux alternative suggestion
-        alt_name = recommended["name"]
-        packages = recommended["packages"]
-
-        print(f"\n💡 Linux Alternative Available!")
-        print(f"   Instead of {program_config['name']}, consider {alt_name}")
-        print(f"   {alt_name} is Linux-native and may better suit your needs.\n")
-
-        # Check what package managers are available
-        available_managers = self._get_available_package_managers()
-        install_options = []
-
-        for manager, package in packages.items():
-            if manager in available_managers:
-                install_options.append((manager, package))
-
-        if install_options:
-            print("📦 Available installation options:")
-            for i, (manager, package) in enumerate(install_options, 1):
-                cmd = self._get_install_command(manager, package)
-                print(f"   [{i}] {manager}: {cmd}")
-
-        print("\n❓ What would you like to do?")
-        print("   [1] Install Linux alternative")
-        print("   [2] Continue with Windows version")
-        print("   [3] Browse alternatives online")
-        print("   [d] Don't show alternative suggestions again")
-
-        choice = input("\nChoice [1/2/3/d]: ").strip().lower()
-
-        if choice == '1' and install_options:
-            return self._install_linux_alternative(program_config)
-        elif choice == '3':
-            self._offer_web_search(alternatives.get("fallback_search", program_config['name']))
-            return True
-        elif choice == 'd':
-            self.state["user_preferences"]["show_alternative_suggestions"] = False
-            self.save_state()
-            print("💡 Alternative suggestions disabled. You can re-enable them by editing the state file.")
-
-        return False
-
-    def _install_linux_alternative(self, program_config: Dict) -> bool:
-        """Install Linux alternative"""
-        alternatives = program_config.get("alternatives", {})
-        recommended = alternatives.get("recommended")
-        if not recommended:
-            return False
-
-        packages = recommended["packages"]
-        available_managers = self._get_available_package_managers()
-        
-        # Find first available package manager
-        for manager in available_managers:
-            if manager in packages:
-                package = packages[manager]
-                cmd = self._get_install_command(manager, package)
-                alt_name = recommended["name"]
-                
-                print(f"\n📦 Installing {alt_name}...")
-                try:
-                    subprocess.run(cmd.split(), check=True)
-                    print(f"✅ {alt_name} installed successfully!")
-                    return True
-                except subprocess.CalledProcessError:
-                    print(f"❌ Installation failed. Continuing with Windows version.")
-                    return False
-        
-        return False
-
-    def show_warning(self, warning_type: str, program_name: str) -> bool:
-        """Show warning dialog and return whether to continue - GUI or CLI"""
-        pref_key = f"show_{warning_type}s"
-        if not self.state["user_preferences"].get(pref_key, True):
-            return True
-
-        if self.is_gui_mode():
-            should_continue, disable_future = self.gui.show_warning_dialog(warning_type, program_name)
-            if disable_future:
-                self.state["user_preferences"][pref_key] = False
-                self.save_state()
-                print(f"💡 {warning_type.replace('_', ' ').title()} warnings disabled.")
-            return should_continue
-
-        # CLI fallback
-        return self._show_warning_cli(warning_type, program_name)
-
-    def _show_warning_cli(self, warning_type: str, program_name: str) -> bool:
-        """CLI version of warning dialog"""
-        pref_key = f"show_{warning_type}s"
-        
-        message_template = self.messages.get(warning_type, {}).get("message", "")
-        if not message_template:
-            return True
-
-        message = message_template.format(game_name=program_name)
-        instructions = self.messages.get(warning_type, {}).get("instructions", [])
-
-        print(f"\n⚠️  {message}")
-        print("\n💡 How to handle this in Linux:")
-        for instruction in instructions:
-            print(f"   • {instruction}")
-
-        print(f"\n❓ Continue launching {program_name}?")
-        print("   [y] Yes, continue")
-        print("   [n] No, let me handle this first")
-        print("   [d] Don't show this type of warning again")
-
-        choice = input("\nChoice [y/n/d]: ").strip().lower()
-
-        if choice == 'd':
-            self.state["user_preferences"][pref_key] = False
-            self.save_state()
-            print(f"💡 {warning_type.replace('_', ' ').title()} warnings disabled.")
-            return True
-        elif choice == 'n':
-            return False
-
     def _has_useful_installers(self, slug: str) -> bool:
         """Check if Lutris game page has useful Windows-compatible installers"""
         try:
@@ -579,7 +620,14 @@ class EasyEXE:
 
     def handle_unknown_program(self, exe_path: str, pe_info: Dict) -> bool:
         """Handle unknown program by asking user and potentially launching Lutris"""
-        if self.ask_if_game(exe_path, pe_info):
+        is_game = self.ask_if_game(exe_path, pe_info)
+
+        if is_game is None:
+            # User cancelled
+            print("🚫 Installation cancelled by user.")
+            return True  # Exit
+
+        if is_game:
             # User says it's a game - try Lutris
             detected_name = pe_info.get('product_name', Path(exe_path).stem)
             print(f"\n🎮 Searching Lutris for {detected_name}...")
@@ -606,7 +654,7 @@ class EasyEXE:
                     elif choice == '2':
                         print(f"📦 Continuing with Wine installation for {detected_name}...")
                         return False  # Continue with Wine
-                    elif choice == 'c':
+                    elif choice in ['c', 'cancel']:
                         print("🚫 Installation cancelled")
                         return True  # Exit
                     else:
@@ -879,7 +927,8 @@ class EasyEXE:
 
         # If no program config found, ask user if it's a game
         if not program_config:
-            if self.handle_unknown_program(exe_path, pe_info):
+            should_exit = self.handle_unknown_program(exe_path, pe_info)
+            if should_exit:
                 return  # User chose to use Lutris or cancelled
 
             # Continue with Wine as application
@@ -888,7 +937,13 @@ class EasyEXE:
             config_name = program_config['name']
 
             # Check for Linux alternatives first
-            if self.suggest_linux_alternative(program_config):
+            alt_result = self.suggest_linux_alternative(program_config)
+            if alt_result is None:
+                # User cancelled
+                print("🚫 Installation cancelled by user.")
+                return
+            elif alt_result:
+                # User chose alternative or browsed online
                 return
 
         # For games, check Lutris first
@@ -937,7 +992,13 @@ class EasyEXE:
         if program_config:
             warnings = program_config.get('warnings', [])
             for warning in warnings:
-                if not self.show_warning(warning, config_name):
+                warning_result = self.show_warning(warning, config_name)
+                if warning_result is None:
+                    # User cancelled
+                    print("🚫 Launch cancelled by user.")
+                    return
+                elif not warning_result:
+                    # User chose not to continue
                     print("🚫 Launch cancelled by user.")
                     return
 
@@ -982,7 +1043,13 @@ class EasyEXE:
         if program_config:
             warnings = program_config.get('warnings', [])
             for warning in warnings:
-                if not self.show_warning(warning, config_name):
+                warning_result = self.show_warning(warning, config_name)
+                if warning_result is None:
+                    # User cancelled
+                    print("🚫 Launch cancelled by user.")
+                    return
+                elif not warning_result:
+                    # User chose not to continue
                     print("🚫 Launch cancelled by user.")
                     return
 
@@ -1218,10 +1285,11 @@ C:
         else:
             self.handle_windows_program(exe_path, program_config, category)
 
+
 def main():
     parser = argparse.ArgumentParser(
         prog='easy_exe',
-        description='Easy EXE - Automatic Windows executable launcher with GUI support'
+        description='Easy EXE - Automatic Windows executable launcher with proper GUI/CLI sync'
     )
     parser.add_argument('executable', nargs='?', help='Path to executable file')
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose logging')
@@ -1241,7 +1309,7 @@ def main():
             try:
                 from easy_exe_gui import QApplication, DependencyDialog
                 app = QApplication(sys.argv)
-                
+
                 mock_deps = [
                     ("wine", {
                         "description": "Windows application compatibility layer",
@@ -1254,10 +1322,10 @@ def main():
                         "benefits": ["Community-optimized game configurations", "Multiple Windows compatibility layers"]
                     })
                 ]
-                
+
                 dialog = DependencyDialog(mock_deps, "ubuntu", False, None)
                 dialog.show()
-                
+
                 print("GUI test dialog opened. Close it to continue...")
                 sys.exit(app.exec())
             except Exception as e:
@@ -1267,11 +1335,13 @@ def main():
                 sys.exit(1)
         else:
             print("❌ GUI components not available")
+            if gui_import_error:
+                print(f"💡 Reason: {gui_import_error}")
             print("💡 Install PyQt6: pip install PyQt6")
             sys.exit(1)
 
     # Initialize Easy EXE
-    easy_exe = EasyEXE(force_cli=args.cli)
+    easy_exe = EasyEXE(force_cli=args.cli, verbose=args.verbose)
 
     if args.list:
         easy_exe.list_managed_programs()
@@ -1283,6 +1353,9 @@ def main():
             print(f"\n💡 GUI mode available! Dialogs will be shown graphically.")
         else:
             print(f"\n📟 Running in CLI mode.")
+            if gui_import_error and args.verbose:
+                print(f"💡 GUI unavailable: {gui_import_error}")
+
 
 if __name__ == "__main__":
     main()

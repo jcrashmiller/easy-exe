@@ -30,6 +30,8 @@
       "alternatives": {
         "recommended": {
           "name": "OpenRA",
+          "quick_summary": "Modern RTS engine with classic gameplay",
+          "critical_caveat": "Recreation, not exact StarCraft experience",
           "packages": {
             "arch": "openra",
             "ubuntu": "openra",
@@ -85,6 +87,7 @@
       "alternatives": {
         "recommended": {
           "name": "KPatience",
+          "quick_summary": "Collection of solitaire card games",
           "packages": {
             "arch": "kpat",
             "ubuntu": "kpat",
@@ -109,6 +112,7 @@
       "alternatives": {
         "recommended": {
           "name": "KMines",
+          "quick_summary": "Classic minesweeper with modern features",
           "packages": {
             "arch": "kmines",
             "ubuntu": "kmines",
