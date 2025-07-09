@@ -1,0 +1,142 @@
+{
+  "dependencies": {
+    "wine": {
+      "status": "core",
+      "description": "Windows application compatibility layer",
+      "platforms": ["windows"],
+      "commands": {
+        "arch": "sudo pacman -S wine",
+        "ubuntu": "sudo apt install wine",
+        "debian": "sudo apt install wine",
+        "fedora": "sudo dnf install wine",
+        "opensuse": "sudo zypper install wine",
+        "unknown": "# Please install wine using your package manager"
+      },
+      "benefits": [
+        "Essential for running Windows applications",
+        "Mature and stable compatibility layer"
+      ]
+    },
+    "dosbox": {
+      "status": "core",
+      "description": "DOS program emulator",
+      "platforms": ["dos"],
+      "commands": {
+        "arch": "sudo pacman -S dosbox",
+        "ubuntu": "sudo apt install dosbox",
+        "debian": "sudo apt install dosbox",
+        "fedora": "sudo dnf install dosbox",
+        "opensuse": "sudo zypper install dosbox",
+        "unknown": "# Please install dosbox using your package manager"
+      },
+      "benefits": [
+        "Essential for running DOS programs",
+        "Excellent compatibility with classic software"
+      ]
+    },
+    "file": {
+      "status": "core",
+      "description": "File type detection utility",
+      "platforms": ["all"],
+      "commands": {
+        "arch": "# file is usually pre-installed",
+        "ubuntu": "sudo apt install file",
+        "debian": "sudo apt install file",
+        "fedora": "sudo dnf install file",
+        "opensuse": "sudo zypper install file",
+        "unknown": "# Please install file utility using your package manager"
+      },
+      "benefits": [
+        "Accurately detects DOS vs Windows executables",
+        "Essential for proper program routing"
+      ]
+    },
+    "dosbox-x": {
+      "status": "enhancement",
+      "description": "Enhanced DOS emulator with better performance",
+      "platforms": ["dos"],
+      "commands": {
+        "arch": "sudo pacman -S dosbox-x",
+        "ubuntu": "sudo apt install dosbox-x",
+        "debian": "sudo apt install dosbox-x",
+        "fedora": "sudo dnf install dosbox-x",
+        "opensuse": "sudo zypper install dosbox-x",
+        "unknown": "# Please install dosbox-x using your package manager"
+      },
+      "benefits": [
+        "Faster performance than standard DOSBox",
+        "More accurate hardware emulation",
+        "Better compatibility with complex DOS games",
+        "Advanced features and configuration options"
+      ]
+    },
+    "lutris": {
+      "status": "enhancement",
+      "description": "Gaming platform with advanced Windows game support",
+      "platforms": ["windows"],
+      "commands": {
+        "arch": "sudo pacman -S lutris",
+        "ubuntu": "sudo apt install lutris",
+        "debian": "sudo apt install lutris",
+        "fedora": "sudo dnf install lutris",
+        "opensuse": "sudo zypper install lutris",
+        "flatpak": "flatpak install net.lutris.Lutris",
+        "unknown": "# Please install lutris using your package manager"
+      },
+      "benefits": [
+        "Community-optimized game configurations",
+        "Multiple Windows compatibility layers",
+        "Automatic dependency management",
+        "Native Linux game support"
+      ]
+    },
+    "winetricks": {
+      "status": "enhancement",
+      "description": "Wine configuration and Windows component installer",
+      "platforms": ["windows"],
+      "commands": {
+        "arch": "sudo pacman -S winetricks",
+        "ubuntu": "sudo apt install winetricks",
+        "debian": "sudo apt install winetricks",
+        "fedora": "sudo dnf install winetricks",
+        "opensuse": "sudo zypper install winetricks",
+        "unknown": "# Please install winetricks using your package manager"
+      },
+      "benefits": [
+        "Installs Windows components and libraries",
+        "Fixes compatibility issues",
+        "Easy Wine prefix management",
+        "Essential for complex Windows applications"
+      ]
+    },
+    "steam": {
+      "status": "enhancement",
+      "description": "Gaming platform with Proton compatibility layer",
+      "platforms": ["windows"],
+      "commands": {
+        "arch": "sudo pacman -S steam",
+        "ubuntu": "sudo apt install steam",
+        "debian": "sudo apt install steam",
+        "fedora": "sudo dnf install steam",
+        "opensuse": "sudo zypper install steam",
+        "flatpak": "flatpak install com.valvesoftware.Steam",
+        "unknown": "# Please install steam using your package manager"
+      },
+      "benefits": [
+        "Access to large Linux-compatible game library",
+        "Proton compatibility for Windows games",
+        "Native Linux game support",
+        "Automatic game updates and cloud saves"
+      ]
+    }
+  },
+  "terminal_instructions": [
+    "1. Open a terminal:",
+    "   • Press Ctrl+Alt+T (most Linux distributions)",
+    "   • Or search for 'Terminal' in your application menu",
+    "   • Or right-click on desktop and select 'Open Terminal'",
+    "2. Copy and paste these commands one at a time:",
+    "3. Press Enter after each command and wait for it to complete",
+    "4. Run Easy EXE again!"
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "disc_warning": {
+    "message": "{game_name} typically requires the original CD/DVD to be inserted or an ISO file mounted.",
+    "instructions": [
+      "Insert original disc (usually auto-mounts to /media/)",
+      "Or mount ISO file:",
+      "- Right-click ISO → 'Mount' (in file manager)",
+      "- Or command line: sudo mount -o loop file.iso /mnt/",
+      "Check /media/ or /mnt/ for mounted content",
+      "Then run this software again"
+    ]
+  },
+  "drm_warning": {
+    "message": "{game_name} may have copy protection that requires a No-CD patch or crack to function properly.",
+    "instructions": [
+      "Some older games used intrusive copy protection",
+      "No-CD patches remove disc checking requirements",
+      "Check community forums for compatibility information",
+      "Consider purchasing modern DRM-free versions when available"
+    ]
+  },
+  "compatibility_warning": {
+    "message": "{game_name} may require specific Wine settings or Windows components to function properly.",
+    "instructions": [
+      "Some applications need specific Wine configurations",
+      "Check Wine Application Database (AppDB) for tips",
+      "Consider using winetricks to install required components",
+      "Community forums often have working configurations"
+    ]
+  },
+  "post_install_windows": {
+    "title": "Windows Application Installation Complete",
+    "instructions": [
+      "If you installed an application:",
+      "Look in your system's application launcher (menu, dock, or search)",
+      "If this was a portable app:",
+      "Double-click this same file again to run it"
+    ],
+    "notes": [
+      "Either way, subsequent launches will be faster!"
+    ]
+  },
+  "post_install_dos": {
+    "title": "DOS Program Setup Complete",
+    "instructions": [
+      "If you installed a DOS application:",
+      "Look for the main executable file (like wp.exe for WordPerfect)",
+      "Double-click the main program file to run it",
+      "If this was a portable DOS program:",
+      "Double-click this same file again to run it"
+    ],
+    "notes": [
+      "DOSBox configurations are saved for consistent performance",
+      "Each DOS program gets its own optimized settings"
+    ]
+  }
+}

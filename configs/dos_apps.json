@@ -1,0 +1,97 @@
+{
+  "sensible_defaults": {
+    "emulator": "dosbox",
+    "settings": {
+      "cycles": "3000",
+      "machine": "svga_s3",
+      "core": "normal",
+      "memsize": "4",
+      "frameskip": "0",
+      "sound": {
+        "sbtype": "none"
+      },
+      "video": {
+        "output": "surface",
+        "aspect": "false",
+        "scaler": "none"
+      }
+    },
+    "mount_options": {
+      "drive_letter": "C",
+      "type": "dir"
+    },
+    "notes": "Conservative settings for business applications - lower memory and no sound"
+  },
+  "programs": [
+    {
+      "name": "WordPerfect 6.2",
+      "executable_names": ["setup.exe", "cdsetup.exe", "install.exe"],
+      "installed_executables": ["wp.exe", "wperfect.exe"],
+      "parent_directory_patterns": ["*wordperfect*", "*corel*", "*wp62*"],
+      "emulator": "dosbox",
+      "settings": {
+        "cycles": "3000",
+        "machine": "svga_s3",
+        "memsize": "8",
+        "sound": {
+          "sbtype": "none"
+        }
+      },
+      "warnings": ["disc_warning"],
+      "notes": "Word processing application with higher memory requirements",
+      "category": "application"
+    },
+    {
+      "name": "Turbo Pascal 7.0",
+      "executable_names": ["setup.exe", "install.exe"],
+      "installed_executables": ["turbo.exe", "bp.exe", "tpx.exe"],
+      "parent_directory_patterns": ["*turbo*pascal*", "*tp7*", "*borland*"],
+      "emulator": "dosbox",
+      "settings": {
+        "cycles": "3000",
+        "machine": "svga_s3",
+        "memsize": "4",
+        "sound": {
+          "sbtype": "none"
+        }
+      },
+      "warnings": ["disc_warning"],
+      "notes": "Programming environment - no sound needed",
+      "category": "application"
+    },
+    {
+      "name": "Norton Commander",
+      "executable_names": ["setup.exe", "install.exe"],
+      "installed_executables": ["nc.exe", "norton.exe"],
+      "parent_directory_patterns": ["*norton*commander*", "*nc*"],
+      "emulator": "dosbox",
+      "settings": {
+        "cycles": "3000",
+        "machine": "svga_s3",
+        "memsize": "4",
+        "sound": {
+          "sbtype": "none"
+        }
+      },
+      "notes": "File manager - simple and lightweight",
+      "category": "application"
+    },
+    {
+      "name": "DOS Edit",
+      "executable_names": ["edit.exe", "edit.com"],
+      "installed_executables": ["edit.exe", "edit.com"],
+      "parent_directory_patterns": ["*dos*", "*edit*"],
+      "emulator": "dosbox",
+      "settings": {
+        "cycles": "1000",
+        "machine": "svga_s3",
+        "memsize": "2",
+        "sound": {
+          "sbtype": "none"
+        }
+      },
+      "notes": "Simple text editor - minimal requirements",
+      "category": "application"
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+examples/test_programs
+*.log
+*.tmp
+*~
+.DS_Store

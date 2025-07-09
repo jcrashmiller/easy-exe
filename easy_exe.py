@@ -1,0 +1,1288 @@
+#!/usr/bin/env python3
+"""
+Easy EXE - Automatic Windows executable launcher for Linux
+Handles Wine, DOSBox, and Lutris with intelligent routing
+Now with optional GUI dialogs using PyQt6
+"""
+
+import argparse
+import json
+import logging
+import os
+import re
+import subprocess
+import sys
+import hashlib
+import time
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Any
+import struct
+import requests
+from bs4 import BeautifulSoup
+import urllib.parse
+
+# Try to import GUI components
+try:
+    from easy_exe_gui import create_gui_wrapper, HAS_QT
+    GUI_AVAILABLE = HAS_QT
+except ImportError:
+    GUI_AVAILABLE = False
+    print("GUI components not available - running in CLI-only mode")
+
+class EasyEXE:
+    def __init__(self, force_cli: bool = False):
+        self.force_cli = force_cli  # Force CLI mode even if GUI available
+        self.setup_paths()
+        self.setup_logging()
+        self.load_dependencies()
+        self.load_messages()
+        self.load_configs()
+        self.load_state()
+        
+        # Initialize GUI if available and not forced to CLI
+        self.gui = None
+        if GUI_AVAILABLE and not force_cli:
+            try:
+                self.gui = create_gui_wrapper(self)
+                if self.gui.is_gui_available():
+                    self.logger.info("GUI mode available")
+                else:
+                    self.logger.info("Display not available - using CLI mode")
+                    self.gui = None
+            except Exception as e:
+                self.logger.debug(f"GUI initialization failed: {e}")
+                self.gui = None
+        
+        self.check_dependencies()
+
+    def is_gui_mode(self) -> bool:
+        """Check if we're running in GUI mode"""
+        return self.gui is not None and not self.force_cli
+
+    def setup_paths(self):
+        """Initialize directory paths"""
+        self.cache_dir = Path.home() / ".cache" / "easy-exe"
+        self.data_dir = Path.home() / ".local" / "share" / "easy-exe"
+        self.config_dir = Path(__file__).parent / "configs"
+
+        # Create directories
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        (self.data_dir / "wine_prefixes").mkdir(parents=True, exist_ok=True)
+
+        self.state_file = self.data_dir / "easy_exe_state.json"
+
+    def setup_logging(self):
+        """Setup logging configuration"""
+        log_file = self.cache_dir / "easy_exe.log"
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+
+    def load_dependencies(self):
+        """Load dependency configuration"""
+        deps_file = self.config_dir / "dependencies.json"
+        try:
+            with open(deps_file, 'r') as f:
+                self.dependencies_config = json.load(f)
+        except FileNotFoundError:
+            self.logger.error(f"Dependencies config not found: {deps_file}")
+            sys.exit(1)
+
+    def load_messages(self):
+        """Load message templates"""
+        messages_file = self.config_dir / "messages.json"
+        try:
+            with open(messages_file, 'r') as f:
+                self.messages = json.load(f)
+        except FileNotFoundError:
+            self.logger.error(f"Messages config not found: {messages_file}")
+            sys.exit(1)
+
+    def load_configs(self):
+        """Load application configurations"""
+        config_files = {
+            'dos_apps': 'dos_apps.json',
+            'dos_games': 'dos_games.json',
+            'windows_apps': 'windows_apps.json',
+            'windows_games': 'windows_games.json'
+        }
+
+        self.configs = {}
+        for config_name, filename in config_files.items():
+            config_path = self.config_dir / filename
+            try:
+                with open(config_path, 'r') as f:
+                    self.configs[config_name] = json.load(f)
+            except FileNotFoundError:
+                self.logger.warning(f"Config not found: {config_path}")
+                self.configs[config_name] = {"programs": []}
+
+    def load_state(self):
+        """Load application state"""
+        try:
+            with open(self.state_file, 'r') as f:
+                self.state = json.load(f)
+        except FileNotFoundError:
+            self.state = {
+                "windows_prefixes": {},
+                "dos_configs": {},
+                "user_preferences": {
+                    "show_disc_warnings": True,
+                    "show_alternative_suggestions": True
+                }
+            }
+
+        # Ensure all required preferences exist
+        if "user_preferences" not in self.state:
+            self.state["user_preferences"] = {}
+
+        defaults = {
+            "show_disc_warnings": True,
+            "show_alternative_suggestions": True
+        }
+
+        for key, default_value in defaults.items():
+            if key not in self.state["user_preferences"]:
+                self.state["user_preferences"][key] = default_value
+
+    def save_state(self):
+        """Save application state"""
+        with open(self.state_file, 'w') as f:
+            json.dump(self.state, f, indent=2)
+
+    def detect_distribution(self) -> str:
+        """Detect the Linux distribution"""
+        try:
+            # Try reading /etc/os-release
+            with open('/etc/os-release', 'r') as f:
+                content = f.read().lower()
+                if 'arch' in content or 'garuda' in content:
+                    return 'arch'
+                elif 'ubuntu' in content or 'mint' in content or 'elementary' in content:
+                    return 'ubuntu'
+                elif 'debian' in content:
+                    return 'debian'
+                elif 'fedora' in content:
+                    return 'fedora'
+                elif 'opensuse' in content or 'suse' in content:
+                    return 'opensuse'
+        except FileNotFoundError:
+            pass
+        return 'unknown'
+
+    def check_dependencies(self):
+        """Check for required and optional dependencies"""
+        deps = self.dependencies_config["dependencies"]
+        distro = self.detect_distribution()
+
+        # Check core dependencies
+        core_missing = []
+        for dep_name, dep_info in deps.items():
+            if dep_info["status"] == "core":
+                if not self._check_command(dep_name):
+                    core_missing.append((dep_name, dep_info))
+                else:
+                    self.logger.info(f"✓ {dep_name} found")
+
+        # If core dependencies missing, show installation help
+        if core_missing:
+            if self.is_gui_mode():
+                # Try GUI dialog first
+                if self.gui.show_dependency_dialog(core_missing, distro, required=True):
+                    sys.exit(1)  # User chose to exit and install
+                else:
+                    # Fallback to CLI
+                    self._show_dependency_help_cli(core_missing, distro, required=True)
+                    sys.exit(1)
+            else:
+                self._show_dependency_help_cli(core_missing, distro, required=True)
+                sys.exit(1)
+
+        # Check enhancement dependencies
+        enhancement_missing = []
+        for dep_name, dep_info in deps.items():
+            if dep_info["status"] == "enhancement":
+                if not self._check_command(dep_name):
+                    enhancement_missing.append((dep_name, dep_info))
+                    self.logger.warning(f"✗ {dep_name} not found")
+                else:
+                    self.logger.info(f"✓ {dep_name} found")
+
+        # Show enhancement suggestions
+        if enhancement_missing:
+            if self.is_gui_mode():
+                # Try GUI dialog
+                self.gui.show_dependency_dialog(enhancement_missing, distro, required=False)
+            else:
+                # CLI fallback
+                self._show_dependency_help_cli(enhancement_missing, distro, required=False)
+
+    def _check_command(self, command: str) -> bool:
+        """Check if a command is available"""
+        try:
+            subprocess.run(['which', command], capture_output=True, check=True)
+            return True
+        except subprocess.CalledProcessError:
+            return False
+
+    # [Rest of the methods remain the same as original - continuing with utility methods]
+    
+    def read_pe_header(self, exe_path: str) -> Dict[str, str]:
+        """Extract information from PE header"""
+        try:
+            with open(exe_path, 'rb') as f:
+                # Read DOS header
+                dos_header = f.read(64)
+                if dos_header[:2] != b'MZ':
+                    return {}
+
+                # Get PE header offset
+                pe_offset = struct.unpack('<I', dos_header[60:64])[0]
+                f.seek(pe_offset)
+
+                # Read PE signature
+                pe_sig = f.read(4)
+                if pe_sig != b'PE\x00\x00':
+                    return {}
+
+                # Skip to version info (simplified extraction)
+                # This is a basic implementation - could be enhanced
+                f.seek(0)
+                content = f.read(8192)  # Read first 8KB
+
+                info = {}
+                # Look for common version info strings
+                for pattern, key in [
+                    (b'ProductName\x00\x00([^\x00]+)', 'product_name'),
+                    (b'CompanyName\x00\x00([^\x00]+)', 'company_name'),
+                    (b'FileDescription\x00\x00([^\x00]+)', 'description'),
+                    (b'InternalName\x00\x00([^\x00]+)', 'internal_name')
+                ]:
+                    match = re.search(pattern, content)
+                    if match:
+                        try:
+                            info[key] = match.group(1).decode('utf-8', errors='ignore').strip()
+                        except:
+                            pass
+
+                return info
+        except Exception as e:
+            self.logger.debug(f"Could not read PE header: {e}")
+            return {}
+
+    def normalize_game_name(self, name: str) -> str:
+        """Normalize game name for Lutris search"""
+        # Remove common suffixes and prefixes
+        name = re.sub(r'\b(the|a|an)\b', '', name, flags=re.IGNORECASE)
+        # Remove version numbers and edition info
+        name = re.sub(r'\b(v?\d+\.?\d*|edition|premium|deluxe|goty|special)\b', '', name, flags=re.IGNORECASE)
+        # Remove special characters and normalize spaces
+        name = re.sub(r'[^\w\s]', ' ', name)
+        name = re.sub(r'\s+', ' ', name).strip()
+        return name.lower()
+
+    def search_lutris(self, game_name: str) -> Optional[str]:
+        """Search Lutris for game and return slug if found with useful installers"""
+        try:
+            # Normalize name for search
+            search_name = self.normalize_game_name(game_name)
+            search_query = urllib.parse.quote_plus(search_name)
+
+            # Search Lutris
+            search_url = f"https://lutris.net/games?q={search_query}&platforms=1"
+            self.logger.info(f"Searching Lutris: {search_url}")
+
+            response = requests.get(search_url, timeout=10)
+            if response.status_code != 200:
+                return None
+
+            soup = BeautifulSoup(response.content, 'html.parser')
+
+            # Find game links
+            game_links = soup.find_all('a', href=re.compile(r'/games/[^/]+/$'))
+
+            for link in game_links:
+                href = link.get('href')
+                slug = href.strip('/').split('/')[-1]
+
+                # Check if this game has useful installers
+                if self._has_useful_installers(slug):
+                    self.logger.info(f"Found Lutris game with installers: {slug}")
+                    return slug
+
+            return None
+
+        except Exception as e:
+            self.logger.debug(f"Lutris search failed: {e}")
+            return None
+
+    def _show_dependency_help_cli(self, missing_deps: List[Tuple[str, Dict]], distro: str, required: bool):
+        """Show dependency installation help in CLI mode"""
+        if required:
+            print("❌ Missing core dependencies:")
+            print("📦 Easy EXE cannot continue without these essential tools.\n")
+        else:
+            print("💡 Easy EXE is ready! For the best experience, consider:\n")
+
+        terminal_help = self.dependencies_config["terminal_instructions"]
+
+        for dep_name, dep_info in missing_deps:
+            print(f"📦 {dep_name}: {dep_info['description']}")
+
+            # Get appropriate command for distribution
+            commands = dep_info.get("commands", {})
+            install_cmd = commands.get(distro, commands.get("unknown", f"# Please install {dep_name}"))
+            print(f"   {install_cmd}")
+
+            # Show benefits for enhancements
+            if not required and "benefits" in dep_info:
+                for benefit in dep_info["benefits"][:2]:  # Show first 2 benefits
+                    print(f"   • {benefit}")
+            print()
+
+        if required:
+            print("🖥️  How to install (using the terminal):")
+        else:
+            print("🖥️  To install enhancements (optional):")
+
+        for instruction in terminal_help:
+            print(f"   {instruction}")
+
+        if not required:
+            print("\n🎯 You can install these anytime and Easy EXE will use them automatically!")
+
+    def ask_if_game(self, exe_path: str, pe_info: Dict) -> bool:
+        """Ask user if unknown executable is a game - GUI or CLI"""
+        if self.is_gui_mode():
+            success, choice = self.gui.show_unknown_program_dialog(exe_path, pe_info)
+            if success and choice == "game":
+                return True
+            elif success and choice == "app":
+                return False
+            elif choice == "cancel":
+                sys.exit(0)
+            # Fall through to CLI if GUI failed
+        
+        # CLI fallback
+        detected_name = pe_info.get('product_name', Path(exe_path).stem)
+
+        print(f"\n❓ Unknown Program Detected: {detected_name}")
+        print("   Easy EXE couldn't identify this program automatically.")
+        print("\n💡 Is this a game?")
+        print("   [y] Yes - Search Lutris for game installers")
+        print("   [n] No - Install as Windows application with Wine")
+
+        while True:
+            choice = input("\nChoice [y/n]: ").strip().lower()
+            if choice in ['y', 'yes']:
+                return True
+            elif choice in ['n', 'no']:
+                return False
+            else:
+                print("Please enter 'y' for yes or 'n' for no.")
+
+    def suggest_linux_alternative(self, program_config: Dict) -> bool:
+        """Suggest Linux alternative if available - GUI or CLI"""
+        if not self.state["user_preferences"]["show_alternative_suggestions"]:
+            return False
+
+        alternatives = program_config.get("alternatives")
+        if not alternatives:
+            return False
+
+        if self.is_gui_mode():
+            success, choice = self.gui.show_alternative_dialog(program_config)
+            if success:
+                if choice == "install":
+                    return self._install_linux_alternative(program_config)
+                elif choice == "browse":
+                    self._offer_web_search(alternatives.get("fallback_search", program_config['name']))
+                    return True
+                elif choice == "continue":
+                    return False
+            # Fall through to CLI if GUI failed
+
+        # CLI fallback
+        return self._suggest_linux_alternative_cli(program_config)
+
+    def _suggest_linux_alternative_cli(self, program_config: Dict) -> bool:
+        """CLI version of Linux alternative suggestion"""
+        alternatives = program_config.get("alternatives")
+        recommended = alternatives.get("recommended")
+        if not recommended:
+            # No specific recommendation, offer web search
+            self._offer_web_search(alternatives.get("fallback_search", ""))
+            return False
+
+        # Show Linux alternative suggestion
+        alt_name = recommended["name"]
+        packages = recommended["packages"]
+
+        print(f"\n💡 Linux Alternative Available!")
+        print(f"   Instead of {program_config['name']}, consider {alt_name}")
+        print(f"   {alt_name} is Linux-native and may better suit your needs.\n")
+
+        # Check what package managers are available
+        available_managers = self._get_available_package_managers()
+        install_options = []
+
+        for manager, package in packages.items():
+            if manager in available_managers:
+                install_options.append((manager, package))
+
+        if install_options:
+            print("📦 Available installation options:")
+            for i, (manager, package) in enumerate(install_options, 1):
+                cmd = self._get_install_command(manager, package)
+                print(f"   [{i}] {manager}: {cmd}")
+
+        print("\n❓ What would you like to do?")
+        print("   [1] Install Linux alternative")
+        print("   [2] Continue with Windows version")
+        print("   [3] Browse alternatives online")
+        print("   [d] Don't show alternative suggestions again")
+
+        choice = input("\nChoice [1/2/3/d]: ").strip().lower()
+
+        if choice == '1' and install_options:
+            return self._install_linux_alternative(program_config)
+        elif choice == '3':
+            self._offer_web_search(alternatives.get("fallback_search", program_config['name']))
+            return True
+        elif choice == 'd':
+            self.state["user_preferences"]["show_alternative_suggestions"] = False
+            self.save_state()
+            print("💡 Alternative suggestions disabled. You can re-enable them by editing the state file.")
+
+        return False
+
+    def _install_linux_alternative(self, program_config: Dict) -> bool:
+        """Install Linux alternative"""
+        alternatives = program_config.get("alternatives", {})
+        recommended = alternatives.get("recommended")
+        if not recommended:
+            return False
+
+        packages = recommended["packages"]
+        available_managers = self._get_available_package_managers()
+        
+        # Find first available package manager
+        for manager in available_managers:
+            if manager in packages:
+                package = packages[manager]
+                cmd = self._get_install_command(manager, package)
+                alt_name = recommended["name"]
+                
+                print(f"\n📦 Installing {alt_name}...")
+                try:
+                    subprocess.run(cmd.split(), check=True)
+                    print(f"✅ {alt_name} installed successfully!")
+                    return True
+                except subprocess.CalledProcessError:
+                    print(f"❌ Installation failed. Continuing with Windows version.")
+                    return False
+        
+        return False
+
+    def show_warning(self, warning_type: str, program_name: str) -> bool:
+        """Show warning dialog and return whether to continue - GUI or CLI"""
+        pref_key = f"show_{warning_type}s"
+        if not self.state["user_preferences"].get(pref_key, True):
+            return True
+
+        if self.is_gui_mode():
+            should_continue, disable_future = self.gui.show_warning_dialog(warning_type, program_name)
+            if disable_future:
+                self.state["user_preferences"][pref_key] = False
+                self.save_state()
+                print(f"💡 {warning_type.replace('_', ' ').title()} warnings disabled.")
+            return should_continue
+
+        # CLI fallback
+        return self._show_warning_cli(warning_type, program_name)
+
+    def _show_warning_cli(self, warning_type: str, program_name: str) -> bool:
+        """CLI version of warning dialog"""
+        pref_key = f"show_{warning_type}s"
+        
+        message_template = self.messages.get(warning_type, {}).get("message", "")
+        if not message_template:
+            return True
+
+        message = message_template.format(game_name=program_name)
+        instructions = self.messages.get(warning_type, {}).get("instructions", [])
+
+        print(f"\n⚠️  {message}")
+        print("\n💡 How to handle this in Linux:")
+        for instruction in instructions:
+            print(f"   • {instruction}")
+
+        print(f"\n❓ Continue launching {program_name}?")
+        print("   [y] Yes, continue")
+        print("   [n] No, let me handle this first")
+        print("   [d] Don't show this type of warning again")
+
+        choice = input("\nChoice [y/n/d]: ").strip().lower()
+
+        if choice == 'd':
+            self.state["user_preferences"][pref_key] = False
+            self.save_state()
+            print(f"💡 {warning_type.replace('_', ' ').title()} warnings disabled.")
+            return True
+        elif choice == 'n':
+            return False
+
+    def _has_useful_installers(self, slug: str) -> bool:
+        """Check if Lutris game page has useful Windows-compatible installers"""
+        try:
+            game_url = f"https://lutris.net/games/{slug}/"
+            response = requests.get(game_url, timeout=10)
+
+            if response.status_code != 200:
+                return False
+
+            content = response.text.lower()
+
+            # Look for install buttons with useful platforms
+            useful_keywords = ['wine', 'steam', 'proton', 'epic', 'rockstar', 'gog', 'origin', 'uplay']
+            console_keywords = ['rpcs3', 'pcsx2', 'dolphin', 'ps3', 'ps2', 'gamecube', 'wii']
+
+            # Find install button sections
+            soup = BeautifulSoup(response.content, 'html.parser')
+            install_buttons = soup.find_all(text=re.compile(r'install', re.IGNORECASE))
+
+            for button in install_buttons:
+                # Get surrounding context
+                parent = button.parent
+                if parent:
+                    context = parent.get_text().lower()
+
+                    # Check if it mentions useful platforms
+                    has_useful = any(keyword in context for keyword in useful_keywords)
+                    has_console = any(keyword in context for keyword in console_keywords)
+
+                    if has_useful and not has_console:
+                        return True
+
+            return False
+
+        except Exception as e:
+            self.logger.debug(f"Could not check Lutris installers: {e}")
+            return False
+
+    def handle_unknown_program(self, exe_path: str, pe_info: Dict) -> bool:
+        """Handle unknown program by asking user and potentially launching Lutris"""
+        if self.ask_if_game(exe_path, pe_info):
+            # User says it's a game - try Lutris
+            detected_name = pe_info.get('product_name', Path(exe_path).stem)
+            print(f"\n🎮 Searching Lutris for {detected_name}...")
+
+            lutris_slug = self.search_lutris(detected_name)
+            if lutris_slug:
+                print(f"✅ Found in Lutris! Opening game installer...")
+                return self.launch_with_lutris(lutris_slug, detected_name)
+            else:
+                print(f"❌ No Lutris entry found for {detected_name}")
+                print("\n💡 What would you like to do?")
+                print("   [1] Open Lutris to search manually (you might find other editions)")
+                print("   [2] Install with Wine (Easy EXE will configure it)")
+                print("   [c] Cancel")
+
+                while True:
+                    choice = input("\nChoice [1/2/c]: ").strip().lower()
+                    if choice == '1':
+                        # Open Lutris for manual search
+                        if self._launch_lutris_gui():
+                            return True  # Exit Easy EXE
+                        else:
+                            return False
+                    elif choice == '2':
+                        print(f"📦 Continuing with Wine installation for {detected_name}...")
+                        return False  # Continue with Wine
+                    elif choice == 'c':
+                        print("🚫 Installation cancelled")
+                        return True  # Exit
+                    else:
+                        print("Please enter '1', '2', or 'c'")
+
+        # User says it's not a game, continue with Wine
+        return False
+
+    def _get_available_package_managers(self) -> List[str]:
+        """Get list of available package managers"""
+        managers = []
+        checks = {
+            'arch': 'pacman',
+            'ubuntu': 'apt',
+            'debian': 'apt',
+            'fedora': 'dnf',
+            'flatpak': 'flatpak',
+            'snap': 'snap'
+        }
+
+        for manager, command in checks.items():
+            if self._check_command(command):
+                managers.append(manager)
+
+        return managers
+
+    def _get_install_command(self, manager: str, package: str) -> str:
+        """Get installation command for package manager"""
+        commands = {
+            'arch': f'sudo pacman -S {package}',
+            'ubuntu': f'sudo apt install {package}',
+            'debian': f'sudo apt install {package}',
+            'fedora': f'sudo dnf install {package}',
+            'flatpak': f'flatpak install {package}',
+            'snap': f'sudo snap install {package}'
+        }
+        return commands.get(manager, f'# Install {package}')
+
+    def _offer_web_search(self, search_term: str):
+        """Open browser to alternativeto.net"""
+        if search_term:
+            url = f"https://alternativeto.net/browse/search/?q={urllib.parse.quote_plus(search_term)}"
+            try:
+                subprocess.run(['xdg-open', url])
+                print(f"🌐 Opened browser to search for alternatives to {search_term}")
+            except:
+                print(f"🌐 Visit: {url}")
+
+    def _get_lutris_launch_command(self) -> List[str]:
+        """Determine the best way to launch Lutris"""
+        # Check for native installation first (usually preferred)
+        if self._check_command('lutris'):
+            return ['lutris']
+
+        # Check for flatpak installation
+        try:
+            result = subprocess.run(['flatpak', 'list'], capture_output=True, text=True)
+            if 'net.lutris.Lutris' in result.stdout:
+                return ['flatpak', 'run', 'net.lutris.Lutris']
+        except:
+            pass
+
+        # Fallback to basic lutris command
+        return ['lutris']
+
+    def _launch_lutris_gui(self) -> bool:
+        """Launch Lutris GUI for manual search"""
+        cmd = self._get_lutris_launch_command()
+        try:
+            subprocess.run(cmd)
+            if cmd[0] == 'flatpak':
+                print("🎮 Opened Lutris (Flatpak version) for manual search")
+            else:
+                print("🎮 Opened Lutris for manual search")
+            return True
+        except Exception as e:
+            self.logger.debug(f"Failed to launch Lutris with {cmd}: {e}")
+            print("❌ Could not open Lutris")
+            return False
+
+    def detect_executable_type(self, exe_path: str) -> str:
+        """Detect if executable is DOS or Windows"""
+        try:
+            result = subprocess.run(['file', exe_path], capture_output=True, text=True)
+            output = result.stdout.lower()
+
+            if 'ms-dos' in output or 'dos executable' in output:
+                self.logger.info("Detected DOS executable via file command")
+                return 'dos'
+            elif 'pe32' in output or 'windows' in output:
+                self.logger.info("Detected Windows executable via file command")
+                return 'windows'
+            else:
+                self.logger.info("File command inconclusive, assuming DOS")
+                return 'dos'
+        except:
+            # Fallback to extension-based detection
+            if exe_path.lower().endswith('.exe'):
+                return 'windows'
+            return 'dos'
+
+    def find_program_config(self, exe_path: str, exe_type: str) -> Tuple[Optional[Dict], str]:
+        """Find matching program configuration"""
+        exe_name = Path(exe_path).name.lower()
+        parent_dir = Path(exe_path).parent.name.lower()
+
+        # First try PE header for better identification
+        pe_info = self.read_pe_header(exe_path)
+        detected_name = pe_info.get('product_name', '').lower() if pe_info else ''
+
+        self.logger.debug(f"PE Header info: {pe_info}")
+        if detected_name:
+            self.logger.info(f"PE Header detected product: {pe_info.get('product_name')}")
+
+        # Determine which configs to search
+        if exe_type == 'dos':
+            config_groups = [
+                (self.configs['dos_games'], 'dos game'),
+                (self.configs['dos_apps'], 'dos application')
+            ]
+        else:
+            config_groups = [
+                (self.configs['windows_games'], 'windows game'),
+                (self.configs['windows_apps'], 'windows application')
+            ]
+
+        # Search configurations with priority order
+        best_match = None
+        best_match_type = None
+        match_priority = 0  # Higher = better match
+        best_match_reason = ""
+
+        for config_group, category in config_groups:
+            for program in config_group.get('programs', []):
+                current_priority = 0
+                match_reason = ""
+                program_name = program.get('name', '').lower()
+
+                # Priority 1: PE header product name matches program name (highest priority)
+                if detected_name and program_name:
+                    if program_name.replace(' ', '').replace('-', '') in detected_name.replace(' ', '').replace('-', ''):
+                        current_priority = 100
+                        match_reason = f"PE header product name '{pe_info.get('product_name')}' matches '{program['name']}'"
+                    elif any(word in detected_name for word in program_name.split() if len(word) > 3):
+                        current_priority = 95
+                        match_reason = f"PE header product name '{pe_info.get('product_name')}' partially matches '{program['name']}'"
+
+                # Priority 2: PE header matches any specific executable names (not generic ones)
+                if current_priority == 0 and detected_name:
+                    for pattern in program.get('executable_names', []):
+                        pattern_base = pattern.lower().replace('.exe', '')
+                        if pattern_base not in ['setup', 'install', 'installer'] and pattern_base in detected_name:
+                            current_priority = 90
+                            match_reason = f"PE header product name matches specific pattern '{pattern}'"
+                            break
+
+                # Priority 3: Directory patterns (medium-high priority)
+                if current_priority == 0:
+                    for pattern in program.get('parent_directory_patterns', []):
+                        if self._matches_directory_pattern(parent_dir, pattern):
+                            current_priority = 80
+                            match_reason = f"directory pattern '{pattern}'"
+                            break
+
+                # Priority 4: Specific executable names (not generic)
+                if current_priority == 0:
+                    for pattern in program.get('executable_names', []):
+                        if self._matches_pattern(exe_name, pattern):
+                            pattern_lower = pattern.lower()
+                            if pattern_lower in ['setup.exe', 'install.exe', 'installer.exe']:
+                                current_priority = 30  # Very low priority for generic names
+                            else:
+                                current_priority = 70
+                            match_reason = f"filename pattern '{pattern}'"
+                            break
+
+                # Priority 5: Installed executables
+                if current_priority == 0:
+                    for pattern in program.get('installed_executables', []):
+                        if self._matches_pattern(exe_name, pattern):
+                            current_priority = 75
+                            match_reason = f"installed executable pattern '{pattern}'"
+                            break
+
+                # Update best match if this is better
+                if current_priority > match_priority:
+                    match_priority = current_priority
+                    best_match = program
+                    best_match_type = category
+                    best_match_reason = match_reason
+
+        if best_match and match_priority >= 70:  # Only accept high-confidence matches
+            self.logger.info(f"Detected {best_match['name']} by {best_match_reason} - {best_match_type} (confidence: {match_priority})")
+            return best_match, best_match_type
+        elif best_match and match_priority >= 30:
+            self.logger.info(f"Low confidence match: {best_match['name']} by {best_match_reason} (confidence: {match_priority})")
+            # For low confidence matches, we'll treat as unknown and ask user
+            return None, f"{exe_type} application"
+
+        self.logger.info(f"No confident match found for {exe_name}")
+        return None, f"{exe_type} application"
+
+    def _matches_pattern(self, filename: str, pattern: str) -> bool:
+        """Check if filename matches pattern"""
+        filename = filename.lower()
+        pattern = pattern.lower()
+
+        if filename == pattern:
+            return True
+
+        if '*' in pattern:
+            import fnmatch
+            return fnmatch.fnmatch(filename, pattern)
+
+        if pattern.endswith('.exe'):
+            base_pattern = pattern[:-4]
+            if base_pattern in filename:
+                return True
+
+        return False
+
+    def _matches_directory_pattern(self, dirname: str, pattern: str) -> bool:
+        """Check if directory name matches pattern"""
+        dirname = dirname.lower()
+        pattern = pattern.lower()
+
+        if '*' in pattern:
+            import fnmatch
+            return fnmatch.fnmatch(dirname, pattern)
+
+        return pattern in dirname
+
+    def create_identifier(self, exe_path: str) -> str:
+        """Create unique identifier for executable"""
+        parent_name = Path(exe_path).parent.name
+        exe_name = Path(exe_path).name
+        return f"{parent_name}_{exe_name}".replace(' ', '_').replace('-', '_')
+
+    def launch_with_lutris(self, slug: str, program_name: str) -> bool:
+        """Launch Lutris install for game slug"""
+        print(f"\n🎮 Found {program_name} in Lutris with install scripts!")
+        print("   Opening Lutris installer...")
+
+        cmd = self._get_lutris_launch_command()
+        # Add the install URI
+        cmd.append(f'lutris:install/{slug}')
+
+        try:
+            subprocess.run(cmd)
+            if cmd[0] == 'flatpak':
+                self.logger.info(f"✅ Handed off to Lutris (Flatpak) for {slug}")
+            else:
+                self.logger.info(f"✅ Handed off to Lutris for {slug}")
+            return True
+        except Exception as e:
+            self.logger.error(f"❌ Lutris launch failed: {e}")
+            print(f"❌ Could not launch Lutris. Falling back to Wine installation.")
+            return False
+
+    def handle_windows_program(self, exe_path: str, program_config: Optional[Dict], category: str):
+        """Handle Windows program execution"""
+
+        # Extract PE header info for better identification
+        pe_info = self.read_pe_header(exe_path)
+        if pe_info.get('product_name'):
+            detected_name = pe_info['product_name']
+            self.logger.info(f"PE Header detected: {detected_name}")
+        else:
+            detected_name = program_config['name'] if program_config else "Unknown Windows Program"
+
+        # If no program config found, ask user if it's a game
+        if not program_config:
+            if self.handle_unknown_program(exe_path, pe_info):
+                return  # User chose to use Lutris or cancelled
+
+            # Continue with Wine as application
+            config_name = detected_name
+        else:
+            config_name = program_config['name']
+
+            # Check for Linux alternatives first
+            if self.suggest_linux_alternative(program_config):
+                return
+
+        # For games, check Lutris first
+        if program_config and 'game' in category.lower():
+            # Check for explicit Lutris slug
+            lutris_slug = program_config.get('lutris_slug')
+            if not lutris_slug:
+                # Search Lutris using detected name
+                search_name = pe_info.get('product_name', config_name)
+                lutris_slug = self.search_lutris(search_name)
+
+            if lutris_slug:
+                if self.launch_with_lutris(lutris_slug, detected_name):
+                    return
+
+        # Continue with Wine installation
+        identifier = self.create_identifier(exe_path)
+
+        # Check for existing prefix
+        if identifier in self.state['windows_prefixes']:
+            prefix_info = self.state['windows_prefixes'][identifier]
+            prefix_path = self.data_dir / "wine_prefixes" / prefix_info['prefix_path']
+            self.logger.info(f"Reusing existing Wine prefix: {prefix_path}")
+        else:
+            # Show first-time setup message
+            if program_config:
+                self.logger.info(f"Using specific config for {config_name}")
+                print(f"\n🕐 Setting up {config_name} for the first time...")
+            else:
+                self.logger.info("Using default windows application configuration")
+                print(f"\n🕐 Setting up {config_name} for the first time...")
+            print("   This may take 1-2 minutes to configure Wine.")
+            print("   Subsequent launches will be faster!\n")
+
+            prefix_path = self._setup_wine_prefix(program_config or {})
+
+            # Save state
+            self.state['windows_prefixes'][identifier] = {
+                'prefix_path': prefix_path.name,
+                'last_used': time.strftime('%Y-%m-%dT%H:%M:%S'),
+                'config_used': config_name
+            }
+            self.save_state()
+
+        # Show warnings
+        if program_config:
+            warnings = program_config.get('warnings', [])
+            for warning in warnings:
+                if not self.show_warning(warning, config_name):
+                    print("🚫 Launch cancelled by user.")
+                    return
+
+        # Run program
+        self._run_wine_program(exe_path, prefix_path, program_config)
+
+        # Show post-install guidance
+        self._show_post_install_message('windows', config_name)
+
+    def handle_dos_program(self, exe_path: str, program_config: Optional[Dict], category: str):
+        """Handle DOS program execution"""
+        config_name = program_config['name'] if program_config else "DOS Program"
+        identifier = self.create_identifier(exe_path)
+
+        # Check for existing config
+        if identifier in self.state['dos_configs']:
+            config_info = self.state['dos_configs'][identifier]
+            config_file = self.data_dir / config_info['config_file']
+            self.logger.info(f"Reusing existing DOSBox config: {config_file}")
+        else:
+            # Show first-time setup message
+            if program_config:
+                self.logger.info(f"Using specific config for {config_name}")
+                print(f"\n🕐 Setting up {config_name} for the first time...")
+            else:
+                self.logger.info("Using default DOS application configuration")
+                print(f"\n🕐 Setting up DOS application for the first time...")
+            print("   This may take a moment to configure DOSBox.")
+            print("   Subsequent launches will be faster!\n")
+
+            config_file = self._create_dosbox_config(exe_path, program_config or {})
+
+            # Save state
+            self.state['dos_configs'][identifier] = {
+                'config_file': config_file.name,
+                'last_used': time.strftime('%Y-%m-%dT%H:%M:%S'),
+                'config_used': config_name
+            }
+            self.save_state()
+
+        # Show warnings
+        if program_config:
+            warnings = program_config.get('warnings', [])
+            for warning in warnings:
+                if not self.show_warning(warning, config_name):
+                    print("🚫 Launch cancelled by user.")
+                    return
+
+        # Run program
+        self._run_dos_program(config_file, program_config)
+
+        # Show post-install guidance
+        self._show_post_install_message('dos', config_name)
+
+    def _setup_wine_prefix(self, program_config: Dict) -> Path:
+        """Setup Wine prefix for program"""
+        wine_settings = program_config.get('wine_settings', {})
+        winver = wine_settings.get('winver', 'win10')
+        arch = wine_settings.get('arch', 'win64')
+
+        # Create deterministic prefix name
+        config_hash = hashlib.md5(str(wine_settings).encode()).hexdigest()[:8]
+        prefix_name = f"easy_exe_{config_hash}"
+        prefix_path = self.data_dir / "wine_prefixes" / prefix_name
+
+        env = os.environ.copy()
+        env['WINEPREFIX'] = str(prefix_path)
+
+        if arch == 'win32':
+            env['WINEARCH'] = 'win32'
+            self.logger.info(f"Creating 32-bit Wine prefix: {prefix_path}")
+        else:
+            self.logger.info(f"Creating 64-bit Wine prefix: {prefix_path}")
+
+        # Initialize prefix
+        subprocess.run(['wineboot', '--init'], env=env, capture_output=True)
+
+        # Set Windows version
+        self.logger.info(f"Setting Windows version to {winver}")
+        subprocess.run(['winecfg', '/v', winver], env=env, capture_output=True)
+
+        # Install winetricks packages if specified
+        packages = wine_settings.get('winetricks', [])
+        if packages:
+            self.logger.info(f"Installing winetricks packages: {packages}")
+            cmd = ['winetricks', '--unattended'] + packages
+            subprocess.run(cmd, env=env, capture_output=True)
+
+        return prefix_path
+
+    def _create_dosbox_config(self, exe_path: str, program_config: Dict) -> Path:
+        """Create DOSBox configuration file"""
+        settings = program_config.get('settings', {})
+
+        # Get defaults based on category
+        if program_config.get('category') == 'game':
+            defaults = self.configs['dos_games'].get('sensible_defaults', {}).get('settings', {})
+        else:
+            defaults = self.configs['dos_apps'].get('sensible_defaults', {}).get('settings', {})
+
+        # Merge with program-specific settings
+        final_settings = {**defaults, **settings}
+
+        # Create config filename
+        safe_name = re.sub(r'[^\w]', '', program_config.get('name', 'DOSProgram'))
+        config_file = self.data_dir / f"dosbox_{safe_name}.conf"
+
+        # Determine emulator preference
+        emulator = program_config.get('emulator', 'dosbox')
+        if emulator == 'dosbox-x' and not self._check_command('dosbox-x'):
+            self.logger.error("dosbox-x not found, trying fallback")
+            emulator = 'dosbox'
+
+        # Create config content
+        config_content = f"""[cpu]
+core=auto
+cycles={final_settings.get('cycles', '3000')}
+
+[machine]
+machine={final_settings.get('machine', 'svga_s3')}
+memsize={final_settings.get('memsize', '16')}
+
+[render]
+frameskip=0
+aspect=false
+scaler=normal2x
+
+[dos]
+xms=true
+ems=true
+umb=true
+
+[mixer]
+nosound=false
+rate=44100
+blocksize=1024
+prebuffer=20
+
+[midi]
+mpu401=intelligent
+device=default
+
+[sblaster]
+sbtype=sb16
+sbbase=220
+irq=7
+dma=1
+hdma=5
+mixer=true
+oplmode=auto
+oplrate=44100
+
+[gus]
+gus=false
+
+[speaker]
+pcspeaker=true
+pcrate=44100
+tandy=auto
+tandyrate=44100
+disney=true
+
+[joystick]
+joysticktype=auto
+
+[serial]
+serial1=dummy
+
+[ipx]
+ipx=false
+
+[autoexec]
+@echo off
+mount C "{Path(exe_path).parent}"
+C:
+{Path(exe_path).name}
+"""
+
+        # Write config file
+        with open(config_file, 'w') as f:
+            f.write(config_content)
+
+        self.logger.info(f"Created DOSBox config: {config_file}")
+        return config_file
+
+    def _run_wine_program(self, exe_path: str, prefix_path: Path, program_config: Optional[Dict]):
+        """Run Windows program with Wine"""
+        env = os.environ.copy()
+        env['WINEPREFIX'] = str(prefix_path)
+
+        # Set architecture if specified
+        wine_settings = program_config.get('wine_settings', {}) if program_config else {}
+        arch = wine_settings.get('arch', 'win64')
+        if arch == 'win32':
+            env['WINEARCH'] = 'win32'
+
+        cmd = ['wine', exe_path]
+        self.logger.info(f"Running: {' '.join(cmd)}")
+        self.logger.info(f"Wine prefix: {prefix_path}")
+
+        subprocess.run(cmd, env=env)
+
+    def _run_dos_program(self, config_file: Path, program_config: Optional[Dict]):
+        """Run DOS program with DOSBox"""
+        emulator = program_config.get('emulator', 'dosbox') if program_config else 'dosbox'
+
+        if emulator == 'dosbox-x' and self._check_command('dosbox-x'):
+            cmd = ['dosbox-x', '-conf', str(config_file)]
+        else:
+            cmd = ['dosbox', '-conf', str(config_file)]
+
+        self.logger.info(f"Running: {' '.join(cmd)}")
+        subprocess.run(cmd)
+
+    def _show_post_install_message(self, platform: str, program_name: str):
+        """Show post-installation guidance"""
+        if platform == 'windows':
+            message = self.messages.get('post_install_windows', {})
+        else:
+            message = self.messages.get('post_install_dos', {})
+
+        if not message:
+            return
+
+        print(f"\n✅ {program_name} setup complete!")
+        print(f"\n{message.get('title', '')}")
+
+        for instruction in message.get('instructions', []):
+            print(f"   • {instruction}")
+
+        for note in message.get('notes', []):
+            print(f"\n💡 {note}")
+
+    def list_managed_programs(self):
+        """List all managed programs"""
+        print("=== Easy EXE Managed Programs ===")
+
+        # Windows programs
+        if self.state['windows_prefixes']:
+            print("Windows Programs:")
+            for identifier, info in self.state['windows_prefixes'].items():
+                print(f"  • {identifier}")
+                print(f"    Prefix: {info['prefix_path']}")
+                print(f"    Config: {info['config_used']}")
+                print(f"    Last used: {info['last_used']}")
+                print()
+
+        # DOS programs
+        if self.state['dos_configs']:
+            print("DOS Programs:")
+            for identifier, info in self.state['dos_configs'].items():
+                print(f"  • {identifier}")
+                print(f"    Config: {info['config_file']}")
+                print(f"    Type: {info['config_used']}")
+                print(f"    Last used: {info['last_used']}")
+                print()
+
+        if not self.state['windows_prefixes'] and not self.state['dos_configs']:
+            print("No programs managed yet.")
+
+    def run(self, exe_path: str):
+        """Main execution flow"""
+        if not Path(exe_path).exists():
+            self.logger.error(f"File not found: {exe_path}")
+            sys.exit(1)
+
+        self.logger.info(f"Launching: {exe_path}")
+
+        # Detect executable type
+        exe_type = self.detect_executable_type(exe_path)
+
+        # Find program configuration
+        program_config, category = self.find_program_config(exe_path, exe_type)
+
+        # Handle based on type
+        if exe_type == 'dos':
+            self.handle_dos_program(exe_path, program_config, category)
+        else:
+            self.handle_windows_program(exe_path, program_config, category)
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog='easy_exe',
+        description='Easy EXE - Automatic Windows executable launcher with GUI support'
+    )
+    parser.add_argument('executable', nargs='?', help='Path to executable file')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose logging')
+    parser.add_argument('-l', '--list', action='store_true', help='List managed programs')
+    parser.add_argument('--cli', action='store_true', help='Force CLI mode (disable GUI dialogs)')
+    parser.add_argument('--gui-test', action='store_true', help='Test GUI components')
+
+    args = parser.parse_args()
+
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    # GUI test mode
+    if args.gui_test:
+        if GUI_AVAILABLE:
+            print("Testing GUI components...")
+            try:
+                from easy_exe_gui import QApplication, DependencyDialog
+                app = QApplication(sys.argv)
+                
+                mock_deps = [
+                    ("wine", {
+                        "description": "Windows application compatibility layer",
+                        "commands": {"ubuntu": "sudo apt install wine"},
+                        "benefits": ["Essential for running Windows applications", "Mature and stable"]
+                    }),
+                    ("lutris", {
+                        "description": "Gaming platform with advanced Windows game support",
+                        "commands": {"ubuntu": "sudo apt install lutris"},
+                        "benefits": ["Community-optimized game configurations", "Multiple Windows compatibility layers"]
+                    })
+                ]
+                
+                dialog = DependencyDialog(mock_deps, "ubuntu", False, None)
+                dialog.show()
+                
+                print("GUI test dialog opened. Close it to continue...")
+                sys.exit(app.exec())
+            except Exception as e:
+                print(f"GUI test failed: {e}")
+                import traceback
+                traceback.print_exc()
+                sys.exit(1)
+        else:
+            print("❌ GUI components not available")
+            print("💡 Install PyQt6: pip install PyQt6")
+            sys.exit(1)
+
+    # Initialize Easy EXE
+    easy_exe = EasyEXE(force_cli=args.cli)
+
+    if args.list:
+        easy_exe.list_managed_programs()
+    elif args.executable:
+        easy_exe.run(args.executable)
+    else:
+        parser.print_help()
+        if GUI_AVAILABLE and not args.cli:
+            print(f"\n💡 GUI mode available! Dialogs will be shown graphically.")
+        else:
+            print(f"\n📟 Running in CLI mode.")
+
+if __name__ == "__main__":
+    main()

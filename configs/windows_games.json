@@ -1,0 +1,133 @@
+{
+  "programs": [
+    {
+      "name": "Grand Theft Auto V",
+      "executable_names": ["gta5.exe", "gtav.exe"],
+      "installed_executables": ["gta5.exe", "gtav.exe"],
+      "parent_directory_patterns": ["*gta*", "*grand*theft*auto*"],
+      "lutris_slug": "grand-theft-auto-v",
+      "handler": "wine",
+      "wine_settings": {
+        "winver": "win10",
+        "dxvk": true,
+        "winetricks": ["vcrun2019", "d3dcompiler_47"]
+      },
+      "warnings": ["disc_warning"],
+      "notes": "Modern open-world crime game",
+      "category": "game"
+    },
+    {
+      "name": "StarCraft",
+      "executable_names": ["starcraft.exe"],
+      "installed_executables": ["starcraft.exe"],
+      "parent_directory_patterns": ["*starcraft*", "*sc*"],
+      "lutris_slug": "starcraft",
+      "handler": "wine",
+      "wine_settings": {
+        "winver": "win98",
+        "dxvk": false
+      },
+      "alternatives": {
+        "recommended": {
+          "name": "OpenRA",
+          "packages": {
+            "arch": "openra",
+            "ubuntu": "openra",
+            "flatpak": "net.openra.OpenRA"
+          }
+        },
+        "fallback_search": "starcraft%20rts"
+      },
+      "warnings": ["disc_warning", "drm_warning"],
+      "notes": "Classic RTS game with Linux alternative available",
+      "category": "game"
+    },
+    {
+      "name": "Half-Life",
+      "executable_names": ["hl.exe"],
+      "installed_executables": ["hl.exe", "halflife.exe"],
+      "parent_directory_patterns": ["*half*life*", "*hl*"],
+      "lutris_slug": "half-life",
+      "handler": "wine",
+      "wine_settings": {
+        "winver": "win98",
+        "dxvk": false
+      },
+      "warnings": ["disc_warning"],
+      "notes": "Classic FPS game",
+      "category": "game"
+    },
+    {
+      "name": "Diablo II",
+      "executable_names": ["diablo ii.exe", "d2.exe"],
+      "installed_executables": ["diablo ii.exe", "d2.exe", "game.exe"],
+      "parent_directory_patterns": ["*diablo*", "*d2*"],
+      "lutris_slug": "diablo-2",
+      "handler": "wine",
+      "wine_settings": {
+        "winver": "winxp",
+        "dxvk": false
+      },
+      "warnings": ["disc_warning", "drm_warning"],
+      "notes": "Classic action RPG",
+      "category": "game"
+    },
+    {
+      "name": "Solitaire",
+      "executable_names": ["sol.exe", "solitaire.exe"],
+      "installed_executables": ["sol.exe", "solitaire.exe"],
+      "parent_directory_patterns": ["*solitaire*", "*sol*"],
+      "handler": "wine",
+      "wine_settings": {
+        "winver": "win98",
+        "dxvk": false
+      },
+      "alternatives": {
+        "recommended": {
+          "name": "KPatience",
+          "packages": {
+            "arch": "kpat",
+            "ubuntu": "kpat",
+            "flatpak": "org.kde.kpat"
+          }
+        },
+        "fallback_search": "solitaire%20card%20game"
+      },
+      "notes": "Simple card game with excellent Linux alternatives",
+      "category": "game"
+    },
+    {
+      "name": "Minesweeper",
+      "executable_names": ["winmine.exe", "minesweeper.exe"],
+      "installed_executables": ["winmine.exe", "minesweeper.exe"],
+      "parent_directory_patterns": ["*mine*", "*minesweeper*"],
+      "handler": "wine",
+      "wine_settings": {
+        "winver": "win98",
+        "dxvk": false
+      },
+      "alternatives": {
+        "recommended": {
+          "name": "KMines",
+          "packages": {
+            "arch": "kmines",
+            "ubuntu": "kmines",
+            "flatpak": "org.kde.kmines"
+          }
+        },
+        "fallback_search": "minesweeper"
+      },
+      "notes": "Classic puzzle game with Linux alternatives",
+      "category": "game"
+    }
+  ],
+  "sensible_defaults": {
+    "handler": "wine",
+    "wine_settings": {
+      "winver": "win10",
+      "dxvk": true,
+      "arch": "win64"
+    },
+    "category": "game"
+  }
+}

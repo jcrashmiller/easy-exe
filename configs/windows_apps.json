@@ -1,0 +1,137 @@
+{
+  "programs": [
+    {
+      "name": "Notepad++",
+      "executable_names": ["notepad++.exe", "npp.exe"],
+      "installed_executables": ["notepad++.exe"],
+      "parent_directory_patterns": ["*notepad*", "*npp*"],
+      "handler": "wine",
+      "wine_settings": {
+        "winver": "win10",
+        "dxvk": false
+      },
+      "alternatives": {
+        "recommended": {
+          "name": "Kate",
+          "packages": {
+            "arch": "kate",
+            "ubuntu": "kate",
+            "flatpak": "org.kde.kate"
+          }
+        },
+        "fallback_search": "notepad%2B%2B"
+      },
+      "notes": "Advanced text editor with excellent Linux alternatives",
+      "category": "application"
+    },
+    {
+      "name": "WinRAR",
+      "executable_names": ["winrar.exe", "rar.exe"],
+      "installed_executables": ["winrar.exe"],
+      "parent_directory_patterns": ["winrar", "rar"],
+      "handler": "wine",
+      "wine_settings": {
+        "winver": "win10",
+        "dxvk": false
+      },
+      "alternatives": {
+        "recommended": {
+          "name": "Ark",
+          "packages": {
+            "arch": "ark",
+            "ubuntu": "ark",
+            "flatpak": "org.kde.ark"
+          }
+        },
+        "fallback_search": "winrar%20archive"
+      },
+      "notes": "Archive utility with native Linux alternatives",
+      "category": "application"
+    },
+    {
+      "name": "Microsoft Office 2007",
+      "executable_names": ["office.exe"],
+      "installed_executables": ["winword.exe", "excel.exe", "powerpnt.exe"],
+      "parent_directory_patterns": ["*office*", "*2007*"],
+      "handler": "wine",
+      "wine_settings": {
+        "winver": "winxp",
+        "arch": "win32",
+        "winetricks": ["msxml6", "vcrun2005", "riched20", "gdiplus"]
+      },
+      "alternatives": {
+        "recommended": {
+          "name": "LibreOffice",
+          "packages": {
+            "arch": "libreoffice-still",
+            "ubuntu": "libreoffice",
+            "flatpak": "org.libreoffice.LibreOffice"
+          }
+        },
+        "fallback_search": "microsoft%20office"
+      },
+      "warnings": ["compatibility_warning"],
+      "notes": "Office suite - LibreOffice provides excellent compatibility",
+      "category": "application"
+    },
+    {
+      "name": "Adobe Photoshop CS2",
+      "executable_names": ["photoshop.exe"],
+      "installed_executables": ["photoshop.exe"],
+      "parent_directory_patterns": ["*photoshop*", "*adobe*"],
+      "handler": "wine",
+      "wine_settings": {
+        "winver": "winxp",
+        "arch": "win32",
+        "winetricks": ["vcrun2005", "gdiplus", "msxml6"]
+      },
+      "alternatives": {
+        "recommended": {
+          "name": "GIMP",
+          "packages": {
+            "arch": "gimp",
+            "ubuntu": "gimp",
+            "flatpak": "org.gimp.GIMP"
+          }
+        },
+        "fallback_search": "photoshop%20image%20editor"
+      },
+      "warnings": ["compatibility_warning", "drm_warning"],
+      "notes": "Image editor - GIMP provides powerful alternatives",
+      "category": "application"
+    },
+    {
+      "name": "7-Zip",
+      "executable_names": ["7z.exe", "7zfm.exe"],
+      "installed_executables": ["7z.exe", "7zfm.exe"],
+      "parent_directory_patterns": ["*7zip*", "*7-zip*"],
+      "handler": "wine",
+      "wine_settings": {
+        "winver": "win10",
+        "dxvk": false
+      },
+      "alternatives": {
+        "recommended": {
+          "name": "p7zip",
+          "packages": {
+            "arch": "p7zip",
+            "ubuntu": "p7zip-full",
+            "flatpak": "org.gnome.FileRoller"
+          }
+        },
+        "fallback_search": "7zip%20archive"
+      },
+      "notes": "Archive utility - p7zip provides command line compatibility",
+      "category": "application"
+    }
+  ],
+  "sensible_defaults": {
+    "handler": "wine",
+    "wine_settings": {
+      "winver": "win10",
+      "dxvk": false,
+      "arch": "win64"
+    },
+    "category": "application"
+  }
+}

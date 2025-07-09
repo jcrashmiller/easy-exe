@@ -1,0 +1,113 @@
+{
+  "sensible_defaults": {
+    "emulator": "dosbox-x",
+    "settings": {
+      "cycles": "auto",
+      "machine": "svga_s3",
+      "core": "auto",
+      "memsize": "16",
+      "frameskip": "0",
+      "sound": {
+        "sbtype": "sb16",
+        "sbbase": "220",
+        "irq": "7",
+        "dma": "1",
+        "hdma": "5",
+        "mpu401": "intelligent"
+      },
+      "video": {
+        "output": "surface",
+        "aspect": "false",
+        "scaler": "none"
+      }
+    },
+    "mount_options": {
+      "drive_letter": "C",
+      "type": "dir"
+    },
+    "notes": "Default gaming configuration with SoundBlaster 16 support"
+  },
+  "programs": [
+    {
+      "name": "Prince of Persia",
+      "executable_names": ["setup.exe", "install.exe"],
+      "installed_executables": ["prince.exe", "pop.exe"],
+      "parent_directory_patterns": ["*prince*persia*", "*pop*"],
+      "emulator": "dosbox-x",
+      "settings": {
+        "cycles": "3000",
+        "machine": "svga_s3",
+        "memsize": "4",
+        "sound": {
+          "sbtype": "none"
+        }
+      },
+      "warnings": ["disc_warning"],
+      "notes": "Timing-critical platformer - too fast breaks gameplay",
+      "category": "game"
+    },
+    {
+      "name": "DOOM",
+      "executable_names": ["setup.exe", "install.exe"],
+      "installed_executables": ["doom.exe", "doom2.exe"],
+      "parent_directory_patterns": ["*doom*"],
+      "emulator": "dosbox-x",
+      "settings": {
+        "cycles": "15000",
+        "machine": "svga_s3",
+        "core": "auto",
+        "memsize": "16",
+        "sound": {
+          "sbtype": "sb16",
+          "sbbase": "220",
+          "irq": "7",
+          "dma": "1",
+          "hdma": "5"
+        }
+      },
+      "warnings": ["disc_warning"],
+      "notes": "Fast-paced FPS needs higher cycles",
+      "category": "game"
+    },
+    {
+      "name": "SimCity 2000",
+      "executable_names": ["setup.exe", "install.exe"],
+      "installed_executables": ["sc2000.exe", "simcity.exe"],
+      "parent_directory_patterns": ["*simcity*2000*", "*sc2000*"],
+      "emulator": "dosbox-x",
+      "settings": {
+        "cycles": "8000",
+        "machine": "svga_s3",
+        "memsize": "16",
+        "sound": {
+          "sbtype": "sb16",
+          "sbbase": "220",
+          "irq": "7",
+          "dma": "1"
+        }
+      },
+      "warnings": ["disc_warning"],
+      "notes": "Strategy game with moderate speed requirements",
+      "category": "game"
+    },
+    {
+      "name": "Civilization",
+      "executable_names": ["setup.exe", "install.exe"],
+      "installed_executables": ["civ.exe", "civdos.exe"],
+      "parent_directory_patterns": ["*civilization*", "*civ*"],
+      "emulator": "dosbox-x",
+      "settings": {
+        "cycles": "3000",
+        "machine": "svga_s3",
+        "memsize": "8",
+        "sound": {
+          "sbtype": "sb16",
+          "sbbase": "220"
+        }
+      },
+      "warnings": ["disc_warning"],
+      "notes": "Turn-based strategy needs slower speed",
+      "category": "game"
+    }
+  ]
+}
