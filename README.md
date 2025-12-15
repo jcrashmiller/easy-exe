@@ -2,6 +2,10 @@
 
 Automatic Windows executable launcher for Linux. Double-click any .exe file and Easy EXE will automatically detect and configure the best tool (Wine/DOSBox) with optimal settings.
 
+# **IN DEVELOPMENT - NOT READY FOR USE**
+**Do Not Install**
+**Do Not Use**
+
 ## Quick Start
 
 1. Install dependencies: `./scripts/install_dependencies.sh`
